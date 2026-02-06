@@ -8,22 +8,6 @@ const EntryArgs = struct {
     version: usize,
 };
 
-fn createEntry(allocator: std.mem.Allocator, args: EntryArgs) !JsonEntry {
-    var data = args;
-    const id = std.hash.Murmur2_64.hash(args.file);
-    data.dir = try std.fmt.allocPrint(allocator, "src/{s}", .{data.dir});
-
-    return .{
-        .id = id,
-        .data = data,
-    };
-}
-
-const JsonEntry = struct {
-    id: u64 = undefined, 
-    data: EntryArgs, 
-};
-
 const JsonInterface = struct {
     pub const Self = @This();
 
@@ -32,15 +16,15 @@ const JsonInterface = struct {
     root_dir: *std.fs.Dir,
     dirs: []const []const u8,
 
-    reader_buf: []u8 = undefined,
+    reader_buf: [1024*1024]u8 = undefined,
     reader: std.fs.File.Reader = undefined, 
     json_scanner: ?std.json.Scanner = null, 
 
-    writer_buf: []u8 = undefined, 
+    writer_buf: [1024*1024]u8 = undefined, 
     writer: std.fs.File.Writer = undefined,
 
-    entries: ?[]JsonEntry = null, 
-    new_entries: std.ArrayList(JsonEntry) = undefined,
+    entries: ?std.json.Value = null,
+    new_entries: std.json.ObjectMap = undefined, 
     modified_files: std.ArrayList([]const u8) = undefined,
     
     allocator: std.mem.Allocator,
@@ -56,11 +40,12 @@ const JsonInterface = struct {
             .allocator = allocator,
         };
 
-        self.reader = file.reader(self.reader_buf);
-        self.writer = file.writer(self.writer_buf);
+        self.reader = file.reader(&self.reader_buf);
+        self.writer = file.writer(&self.writer_buf);
 
         self.new_entries = std.ArrayList(JsonEntry){};
         self.modified_files = std.ArrayList([]const u8){};
+        self.new_entries = std.json.ObjectMap.init(allocator);
 
         return self;
     }
@@ -68,63 +53,77 @@ const JsonInterface = struct {
     fn deinit(self: *Self) void {
         self.cache_file.close(); 
         self.modified_files.deinit(self.allocator);
-        self.new_entries.deinit(self.allocator);
-
+        self.new_entries.deinit();
+            
         if(self.json_scanner) |*scanner| {
             scanner.deinit();
         }
     }
 
     fn addEntry(self: *Self, entry: JsonEntry) !void {
-        try self.new_entries.append(self.allocator, entry);
+  var id_buf: [32]u8 = undefined;
+      const id_str = try std.fmt.bufPrint(&id_buf, "{d}", .{entry.id});
+
+      // Create a JSON value from the entry data
+      var data_obj = std.json.ObjectMap.init(self.allocator);
+      try data_obj.put("dir", .{.string = entry.data.dir});
+      try data_obj.put("file", .{.string = entry.data.file});
+      try data_obj.put("mtime", .{.integer = @intCast(entry.data.mtime)});
+      try data_obj.put("version", .{.integer = @intCast(entry.data.version)});
+
+      // Add to map with ID as key
+      const key = try self.allocator.dupe(u8, id_str);
     }
 
     fn setEntries(self: *Self) !void {
+        try self.cache_file.seekTo(0);
         const file_size = (try self.cache_file.stat()).size;
-
         try self.reader.interface.fill(file_size);
-        const content = self.reader_buf[0..file_size];
 
-        self.json_scanner.? = try std.json.Scanner.initCompleteInput(self.allocator, content);
-        const parsed = try std.json.parseFromTokenSource([]JsonEntry, self.allocator, &self.json_scanner, .{});
+        const content = try self.reader.interface.readAlloc(self.allocator, file_size);
 
-        self.entries.? = parsed.value;
+        std.debug.print("{s}\n", .{content});
+        self.json_scanner = std.json.Scanner.initCompleteInput(self.allocator, content);
+        const parsed = try std.json.parseFromTokenSource(std.json.Value, self.allocator, &self.json_scanner.?, .{});
+
+        self.entries = parsed.value;
     }
 
     fn updateVersionControl(self: *Self ) !void {
         try self.setEntries();
-
-        for(self.dirs) |dir_name| {
-            var dir = try self.root_dir.openDir(dir_name, .{});
-            defer dir.close();
-
-            const dir_iterator = dir.iterate();
-            while(dir_iterator.next()) |src_file| {
-                if(src_file.kind != .File) continue;
-
-                const src_file_mtime = (try src_file.stat()).mtime;
-                _ = src_file_mtime;
-            }
-        }
-
-        for(self.src_file_names) |src_file_name| {
-            var src_file = try self.root_dir.openFile(src_file_name, .{});
-            defer src_file.close();
-            const src_mtime = (try src_file.stat()).mtime;
-            const hash_id = std.hash.Murmur2_64.hash(src_file_name);
-
-            for(self.entries) |*entry| {
-                if(entry.id != hash_id) continue;
-
-                if(entry.mtime != src_mtime) {
-                    entry.mtime = src_mtime;
-                    entry.version += 1;
-                    try self.modified_files.append(self.allocator, src_file_name);
-                }
-
-                try self.new_entries.append(self.allocator, entry.*);
-            }
-        }
+        const entries = self.entries.?;
+        std.debug.print("{any}\n", .{entries});
+        // for(self.dirs) |dir_name| {
+        //     var dir = try self.root_dir.openDir(dir_name, .{});
+        //     defer dir.close();
+        //
+        //     const dir_iterator = dir.iterate();
+        //     while(dir_iterator.next()) |src_file| {
+        //         if(src_file.kind != .File) continue;
+        //
+        //         const src_file_mtime = (try src_file.stat()).mtime;
+        //         _ = src_file_mtime;
+        //     }
+        // }
+        //
+        // for(self.src_file_names) |src_file_name| {
+        //     var src_file = try self.root_dir.openFile(src_file_name, .{});
+        //     defer src_file.close();
+        //     const src_mtime = (try src_file.stat()).mtime;
+        //     const hash_id = std.hash.Murmur2_64.hash(src_file_name);
+        //
+        //     for(self.entries) |*entry| {
+        //         if(entry.id != hash_id) continue;
+        //
+        //         if(entry.mtime != src_mtime) {
+        //             entry.mtime = src_mtime;
+        //             entry.version += 1;
+        //             try self.modified_files.append(self.allocator, src_file_name);
+        //         }
+        //
+        //         try self.new_entries.append(self.allocator, entry.*);
+        //     }
+        // }
     }
 
     fn writeJsonToFile(self: *Self) !void {
@@ -185,15 +184,17 @@ pub fn main() !void {
     try writer.writeAll("\x1B[H");
     try writer.flush();
 
-    const entry1 = try createEntry(allocator, .{.dir = "Fruits", .file = "Apple", .mtime = 0, .version = 0 });
-    const entry2 = try createEntry(allocator, .{.dir = "Fruits", .file = "Banana", .mtime = 0, .version = 0 });
+    // const entry1 = try createEntry(allocator, &root_dir, .{.dir = "Fruits", .file = "Apple", .mtime = 0, .version = 0 });
+    // const entry2 = try createEntry(allocator, &root_dir, .{.dir = "Fruits", .file = "Banana", .mtime = 0, .version = 0 });
 
     var json_interface = try JsonInterface.init(allocator, "src/cache.json", &root_dir, &[_][]const u8{"src/Fruits"});
     defer json_interface.deinit();
 
-    try json_interface.addEntry(entry1);
-    try json_interface.addEntry(entry2);
-    try json_interface.writeJsonToFile();
+    try json_interface.updateVersionControl();
+
+    // try json_interface.addEntry(entry1);
+    // try json_interface.addEntry(entry2);
+    // try json_interface.writeJsonToFile();
 
     // Where the json entries will get stored until file is written
     // var cached_results = std.ArrayList(JsonEntry){};
