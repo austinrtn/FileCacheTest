@@ -1,13 +1,27 @@
 const std = @import("std");
 
 // What gets parsed to and from for JSON data
-const JsonEntry = struct {
+const EntryArgs = struct {
     dir: []const u8,
     file: []const u8,
     mtime: i128,
     version: usize,
+};
 
-    id: u64,
+fn createEntry(allocator: std.mem.Allocator, args: EntryArgs) !JsonEntry {
+    var data = args;
+    const id = std.hash.Murmur2_64.hash(args.file);
+    data.dir = try std.fmt.allocPrint(allocator, "src/{s}", .{data.dir});
+
+    return .{
+        .id = id,
+        .data = data,
+    };
+}
+
+const JsonEntry = struct {
+    id: u64 = undefined, 
+    data: EntryArgs, 
 };
 
 const JsonInterface = struct {
@@ -54,10 +68,15 @@ const JsonInterface = struct {
     fn deinit(self: *Self) void {
         self.cache_file.close(); 
         self.modified_files.deinit(self.allocator);
+        self.new_entries.deinit(self.allocator);
 
         if(self.json_scanner) |*scanner| {
             scanner.deinit();
         }
+    }
+
+    fn addEntry(self: *Self, entry: JsonEntry) !void {
+        try self.new_entries.append(self.allocator, entry);
     }
 
     fn setEntries(self: *Self) !void {
@@ -73,6 +92,8 @@ const JsonInterface = struct {
     }
 
     fn updateVersionControl(self: *Self ) !void {
+        try self.setEntries();
+
         for(self.dirs) |dir_name| {
             var dir = try self.root_dir.openDir(dir_name, .{});
             defer dir.close();
@@ -82,8 +103,10 @@ const JsonInterface = struct {
                 if(src_file.kind != .File) continue;
 
                 const src_file_mtime = (try src_file.stat()).mtime;
+                _ = src_file_mtime;
             }
         }
+
         for(self.src_file_names) |src_file_name| {
             var src_file = try self.root_dir.openFile(src_file_name, .{});
             defer src_file.close();
@@ -105,15 +128,17 @@ const JsonInterface = struct {
     }
 
     fn writeJsonToFile(self: *Self) !void {
-        const writeable_file = try self.root_dir.createFile(self.cache_file_name); 
+        const writeable_file = try self.root_dir.createFile(self.cache_file_name, .{}); 
         defer writeable_file.close();
         
         var write_buf: [1024 * 1024]u8 = undefined;
         var writer = writeable_file.writer(&write_buf);
         const interface = &writer.interface;
         
-        const json_entries = std.json.fmt(self.new_entries.items, .{});
+        const json_entries = std.json.fmt(self.new_entries.items, .{.whitespace = .indent_2});
+        std.debug.print("{f}\n", .{json_entries});
         try interface.print("{f}", .{json_entries});
+        try interface.flush();
     }
 };
 
@@ -136,10 +161,14 @@ pub fn main() !void {
     var args = std.process.args();
     _ = args.next();
 
-    //Allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    const gpa_allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    //Allocator
+    var arena_alloc = std.heap.ArenaAllocator.init(gpa_allocator);
+    const allocator = arena_alloc.allocator();
+    defer _ = arena_alloc.deinit();
 
     //STDOUT INTERFACE
     var stdout_buffer: [1024]u8 = undefined;
@@ -156,8 +185,15 @@ pub fn main() !void {
     try writer.writeAll("\x1B[H");
     try writer.flush();
 
+    const entry1 = try createEntry(allocator, .{.dir = "Fruits", .file = "Apple", .mtime = 0, .version = 0 });
+    const entry2 = try createEntry(allocator, .{.dir = "Fruits", .file = "Banana", .mtime = 0, .version = 0 });
+
     var json_interface = try JsonInterface.init(allocator, "src/cache.json", &root_dir, &[_][]const u8{"src/Fruits"});
     defer json_interface.deinit();
+
+    try json_interface.addEntry(entry1);
+    try json_interface.addEntry(entry2);
+    try json_interface.writeJsonToFile();
 
     // Where the json entries will get stored until file is written
     // var cached_results = std.ArrayList(JsonEntry){};

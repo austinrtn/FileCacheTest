@@ -1,56 +1,20 @@
 [
-    {
-        "dir": "src/Protiens/",
-        "file": "Beans",
-        "mtime": 1770256215208390656,
-        "version": 0
-    },
-    {
-        "dir": "src/Protiens/",
-        "file": "Steak",
-        "mtime": 1769977022478187512,
-        "version": 0
-    },
-    {
-        "dir": "src/Protiens/",
-        "file": "Peanutbutter",
-        "mtime": 1769977022478187512,
-        "version": 0
-    },
-    {
-        "dir": "src/Grains/",
-        "file": "Bread",
-        "mtime": 1769977022478110909,
-        "version": 0
-    },
-    {
-        "dir": "src/Grains/",
-        "file": "Pasta",
-        "mtime": 1769977022478147540,
-        "version": 0
-    },
-    {
-        "dir": "src/Grains/",
-        "file": "Oats",
-        "mtime": 1769977022478147540,
-        "version": 0
-    },
-    {
-        "dir": "src/Fruits/",
-        "file": "Apple",
-        "mtime": 1770256309089750146,
-        "version": 0
-    },
-    {
-        "dir": "src/Fruits/",
-        "file": "Banana",
-        "mtime": 1769977022478110909,
-        "version": 0
-    },
-    {
-        "dir": "src/Fruits/",
-        "file": "Carrot",
-        "mtime": 1769977022478110909,
-        "version": 0
+  {
+    "id": 14580853738035473301,
+    "data": {
+      "dir": "src/Fruits",
+      "file": "Apple",
+      "mtime": 0,
+      "version": 0
     }
+  },
+  {
+    "id": 2098311538731077268,
+    "data": {
+      "dir": "src/Fruits",
+      "file": "Banana",
+      "mtime": 0,
+      "version": 0
+    }
+  }
 ]
