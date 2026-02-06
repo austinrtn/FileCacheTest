@@ -1,11 +1,13 @@
 const std = @import("std");
 
 // What gets parsed to and from for JSON data
-const EntryArgs = struct {
+const JsonEntry = struct {
     dir: []const u8,
     file: []const u8,
-    mtime: i128,
-    version: usize,
+    full_path: []const u8,
+
+    mtime: i128 = 0,
+    version: usize = 0,
 };
 
 const JsonInterface = struct {
@@ -43,9 +45,8 @@ const JsonInterface = struct {
         self.reader = file.reader(&self.reader_buf);
         self.writer = file.writer(&self.writer_buf);
 
-        self.new_entries = std.ArrayList(JsonEntry){};
-        self.modified_files = std.ArrayList([]const u8){};
         self.new_entries = std.json.ObjectMap.init(allocator);
+        self.modified_files = std.ArrayList([]const u8){};
 
         return self;
     }
@@ -60,19 +61,40 @@ const JsonInterface = struct {
         }
     }
 
+    fn getEntryKey(self: *Self, entry: JsonEntry) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{entry.dir, entry.file});
+    }
+
     fn addEntry(self: *Self, entry: JsonEntry) !void {
-  var id_buf: [32]u8 = undefined;
-      const id_str = try std.fmt.bufPrint(&id_buf, "{d}", .{entry.id});
+        const id = try self.getEntryKey(entry);
+        // Create a JSON value from the entry data
+        var data_obj = std.json.ObjectMap.init(self.allocator);
+        try data_obj.put("dir", .{.string = entry.dir});
+        try data_obj.put("file", .{.string = entry.file});
+        try data_obj.put("mtime", .{.integer = @intCast(entry.mtime)});
+        try data_obj.put("version", .{.integer = @intCast(entry.version)});
 
-      // Create a JSON value from the entry data
-      var data_obj = std.json.ObjectMap.init(self.allocator);
-      try data_obj.put("dir", .{.string = entry.data.dir});
-      try data_obj.put("file", .{.string = entry.data.file});
-      try data_obj.put("mtime", .{.integer = @intCast(entry.data.mtime)});
-      try data_obj.put("version", .{.integer = @intCast(entry.data.version)});
+        try self.new_entries.put(id, .{.object = data_obj });
+    }
 
-      // Add to map with ID as key
-      const key = try self.allocator.dupe(u8, id_str);
+    fn createEntry(self: *Self, file: *std.fs.File, sub_dir_name: []const u8, full_path: []const u8, mtime: i128) !JsonEntry {
+        var found_dir: bool = false;
+        for(self.dirs) |dir| {
+            if(std.mem.eql(u8, dir, sub_dir_name)) {
+                found_dir = true;
+                continue;
+            }
+        }
+
+        if(!found_dir) return error.subDirNotFound;
+
+        return .{
+            .file = file.name,
+            .dir = sub_dir_name, 
+            .full_path = full_path,
+            .mtime = mtime, 
+            .version = 0,
+        };
     }
 
     fn setEntries(self: *Self) !void {
@@ -91,20 +113,32 @@ const JsonInterface = struct {
 
     fn updateVersionControl(self: *Self ) !void {
         try self.setEntries();
-        const entries = self.entries.?;
-        std.debug.print("{any}\n", .{entries});
-        // for(self.dirs) |dir_name| {
-        //     var dir = try self.root_dir.openDir(dir_name, .{});
-        //     defer dir.close();
-        //
-        //     const dir_iterator = dir.iterate();
-        //     while(dir_iterator.next()) |src_file| {
-        //         if(src_file.kind != .File) continue;
-        //
-        //         const src_file_mtime = (try src_file.stat()).mtime;
-        //         _ = src_file_mtime;
-        //     }
-        // }
+        const entries = self.entries.?.object;
+
+        for(self.dirs) |dir_name| {
+            var dir = try self.root_dir.openDir(dir_name, .{});
+            defer dir.close();
+
+            const dir_iterator = dir.iterate();
+            while(dir_iterator.next()) |src_file| {
+                if(src_file.kind != .File) continue;
+                const full_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{dir_name, src_file.name});
+                const src_file_mtime = (try src_file.stat());
+
+                if(entries.get(full_path)) |entry| {
+                    const obj = entry.object; 
+
+                    const mtime = obj.get("mtime").?;
+                    std.debug.print("{}", .{mtime});
+                } 
+                else {
+                    const new_entry = try self.createEntry(&src_file, dir_name, full_path, src_file_mtime);
+                    const json_object = std.json.Value{.object = new_entry};
+
+                    try self.new_entries.put(full_path, json_object);
+                }
+            }
+        }
         //
         // for(self.src_file_names) |src_file_name| {
         //     var src_file = try self.root_dir.openFile(src_file_name, .{});
@@ -134,8 +168,9 @@ const JsonInterface = struct {
         var writer = writeable_file.writer(&write_buf);
         const interface = &writer.interface;
         
-        const json_entries = std.json.fmt(self.new_entries.items, .{.whitespace = .indent_2});
-        std.debug.print("{f}\n", .{json_entries});
+        const json_value = std.json.Value{.object = self.new_entries};
+        const json_entries = std.json.fmt(json_value, .{.whitespace = .indent_2});
+
         try interface.print("{f}", .{json_entries});
         try interface.flush();
     }
@@ -184,13 +219,15 @@ pub fn main() !void {
     try writer.writeAll("\x1B[H");
     try writer.flush();
 
-    // const entry1 = try createEntry(allocator, &root_dir, .{.dir = "Fruits", .file = "Apple", .mtime = 0, .version = 0 });
-    // const entry2 = try createEntry(allocator, &root_dir, .{.dir = "Fruits", .file = "Banana", .mtime = 0, .version = 0 });
 
     var json_interface = try JsonInterface.init(allocator, "src/cache.json", &root_dir, &[_][]const u8{"src/Fruits"});
     defer json_interface.deinit();
 
-    try json_interface.updateVersionControl();
+    _ = try json_interface.createEntry("Apple", "src/Fruits");
+    _ = try json_interface.createEntry("Banana", "src/Fruits");
+    try json_interface.writeJsonToFile();
+
+//    try json_interface.updateVersionControl();
 
     // try json_interface.addEntry(entry1);
     // try json_interface.addEntry(entry2);
