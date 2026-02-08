@@ -29,32 +29,42 @@ pub fn main() !void {
 
     var files_needing_update = std.ArrayList([]const u8){};
     defer files_needing_update.deinit(allocator);
+
+    var deleted_files = std.ArrayList([]const u8){};
+    defer deleted_files.deinit(allocator);
     
     var old_cache_interface = try CacheFile.init(allocator, OLD_CACHE_PATH, ROOT_PATH);
     defer old_cache_interface.deinit();
     const old_entries = try old_cache_interface.parseAndStoreEntries();
-
-    for(old_entries) |entry| {
-        try hash_map.put(entry.full_path, entry.version);
-    }
 
     var temp_cache_interface = try CacheFile.init(allocator, TEMP_CACHE_PATH, ROOT_PATH);
     defer temp_cache_interface.deinit();
     const temp_entries = try temp_cache_interface.parseAndStoreEntries();
 
     for(temp_entries) |entry| {
-        if(hash_map.get(entry.full_path)) |old_version| {
-            if(old_version != entry.version) try files_needing_update.append(allocator, entry.full_path);
+        try hash_map.put(entry.full_path, entry.version);
+    }
+
+    for(old_entries) |entry| {
+        if(hash_map.get(entry.full_path)) |new_version| {
+            if(new_version != entry.version) try files_needing_update.append(allocator, entry.full_path);
+        } else {
+            try deleted_files.append(allocator, entry.full_path);
         }
     }
 
-    try writer.print("{} Files need udpating!\n", .{files_needing_update.items.len});
+    if(files_needing_update.items.len > 0) try writer.print("{} Files need udpating:\n", .{files_needing_update.items.len});
     for(files_needing_update.items) |file| {
         try writer.print("{s}\n", .{file});
     }
+
+    if(deleted_files.items.len > 0) try writer.print("{} Files to be deleted:\n", .{deleted_files.items.len});
+    for(deleted_files.items) |file| {
+        try writer.print("{s}", .{file});
+    }
     try writer.flush();
 
-    try old_cache_interface.updateCache(temp_cache_interface.file_content);
+    //try old_cache_interface.updateCache(temp_cache_interface.file_content);
 
     // var client = std.http.Client{.allocator = allocator};
     // defer client.deinit();

@@ -13,13 +13,6 @@
     "hash": "18190196679882522072",
     "version": 0
   },
-  "src/Fruits/Carrot": {
-    "dir": "src/Fruits",
-    "file": "Carrot",
-    "full_path": "src/Fruits/Carrot",
-    "hash": "3889766522086060796",
-    "version": 0
-  },
   "src/Grains/Bread": {
     "dir": "src/Grains",
     "file": "Bread",
