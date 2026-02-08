@@ -23,7 +23,7 @@ const JsonEntry = @import("JsonEntry.zig").JsonEntry;
 // 4)   Once all files in all listed directories have been iterated through and updated as necessary, the cache.json file is overwritten 
 //      with the new, updated entries.
 
-const CACHE_FILE_NAME = "src/file_cache.json";
+const CACHE_FILE_NAME = "src/cache_temp.json";
 
 const DIRECTORIES = [_][]const u8{
     "src/Fruits",
