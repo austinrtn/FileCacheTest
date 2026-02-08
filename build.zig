@@ -33,30 +33,44 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const write_exe = b.addExecutable(.{
-        .name = "Write",
+    const update_cache_exe= b.addExecutable(.{
+        .name = "Update_Cache",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/write.zig"),
+            .root_source_file = b.path("./src/update-cache.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
 
-    b.installArtifact(write_exe);
+    b.installArtifact(update_cache_exe);
 
-    const write_step = b.step("write", "Write json cache");
-    const write_cmd = b.addRunArtifact(write_exe);
-    write_step.dependOn(&write_cmd.step);
+    const update_cache_step = b.step("update-cache", "Update File Version Cache");
+    const update_cache_cmd= b.addRunArtifact(update_cache_exe);
+    update_cache_step.dependOn(&update_cache_cmd.step);
+    update_cache_cmd.addArg(b.pathFromRoot("."));
 
-    write_cmd.addArg(b.pathFromRoot("."));
-
-    if (b.args) |args| {
-        write_cmd.addArgs(args);
-    }
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
 
+    const version_ctrl_exe = b.addExecutable(.{
+        .name = "Version Control",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("./src/version-ctrl.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const version_ctrl_step = b.step("version_ctrl", "Download and overwrite out-of-date files");
+    const version_ctrl_cmd = b.addRunArtifact(version_ctrl_exe);
+    version_ctrl_step.dependOn(&version_ctrl_cmd.step);
+    version_ctrl_cmd.addArg(b.pathFromRoot("."));
+
+    if (b.args) |args| {
+        version_ctrl_cmd.addArgs(args);
+        update_cache_cmd.addArgs(args);
+    }
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
