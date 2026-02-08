@@ -19,16 +19,20 @@ pub fn main() !void {
     var stdout = std.fs.File.stdout().writer(&writer_buf);
     const writer = &stdout.interface;
 
+    var reader_buf: [1024 * 1024]u8 = undefined;
+    var stdin = std.fs.File.stdin().reader(&reader_buf);
+    const reader = &stdin.interface;
+
     //Clear Screen
     try writer.writeAll("\x1B[2J");
     try writer.writeAll("\x1B[H");
     try writer.flush();
 
-    var hash_map = std.StringArrayHashMap(usize).init(allocator); 
+    var hash_map = std.StringArrayHashMap(JsonEntry).init(allocator); 
     defer hash_map.deinit();
 
-    var files_needing_update = std.ArrayList([]const u8){};
-    defer files_needing_update.deinit(allocator);
+    var entries_to_update = std.ArrayList(JsonEntry){};
+    defer entries_to_update.deinit(allocator);
 
     var deleted_files = std.ArrayList([]const u8){};
     defer deleted_files.deinit(allocator);
@@ -47,27 +51,54 @@ pub fn main() !void {
     const temp_entries = try temp_cache_interface.parseAndStoreEntries();
 
     for(temp_entries) |entry| {
-        try hash_map.put(entry.full_path, entry.version);
+        try hash_map.put(entry.full_path, entry);
     }
 
-    for(old_entries) |entry| {
-        if(hash_map.get(entry.full_path)) |new_version| {
-            if(new_version != entry.version) try files_needing_update.append(allocator, entry.full_path);
+    for(old_entries) |old_entry| {
+        if(hash_map.get(old_entry.full_path)) |temp_entry| {
+            if(temp_entry.version != old_entry.version) try entries_to_update.append(allocator, old_entry);
         } else {
-            try deleted_files.append(allocator, entry.full_path);
+            try deleted_files.append(allocator, old_entry.full_path);
         }
     }
 
-    if(files_needing_update.items.len > 0) try writer.print("{} Files need udpating:\n", .{files_needing_update.items.len});
-    for(files_needing_update.items) |file| {
-        try writer.print("{s}\n", .{file});
+    if(entries_to_update.items.len > 0) try writer.print("{} Files need udpating:\n", .{entries_to_update.items.len});
+    for(entries_to_update.items) |entry| {
+        try writer.print("{s}\n", .{entry.full_path});
+        try writer.writeAll("Would you like to update? [y/n]\n");
+        try writer.flush();
+
+        while(true) {
+            if(reader.takeDelimiterExclusive('\n')) |line| {
+                if(line.len == 0) continue;
+                reader.toss(1);
+
+                const char = std.ascii.toLower(line[0]);
+                if(line.len == 1 and (char == 'y' or char == 'n')) {
+                    if(char == 'n') return;
+                    try client_interface.downloadEntries(entries_to_update.items);
+                    for(client_interface.success_files.items) |item| {
+                        try writer.print("{s}\n\n", .{item.content});
+                        try writer.flush();
+                    }
+                    break;
+                } else {
+                    try writer.writeAll("Invalid input! Try again...\n\n");
+                    try writer.flush();
+                    continue;
+                }
+            } else |err| switch(err) {
+                error.EndOfStream => break,
+                else => return err,
+            }
+        }
     }
 
     if(deleted_files.items.len > 0) try writer.print("{} Files to be deleted:\n", .{deleted_files.items.len});
-    for(deleted_files.items) |file| {
-        try writer.print("{s}\n", .{file});
+    for(deleted_files.items) |entry| {
+        try writer.print("{s}\n", .{entry});
+        try writer.flush();
     }
-    try writer.flush();
 
     //try old_cache_interface.updateCache(temp_cache_interface.file_content);
 
@@ -183,7 +214,7 @@ const ClientInterface = struct {
                 try self.success_files.append(self.allocator, .{.file_path = entry.full_path, .content = content_dupe});
 
             } else {
-                try self.failed_files.append(self.allocator, entry);
+                try self.failed_files.append(self.allocator, entry.full_path);
                 return;
             }
         }

@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const version_ctrl_step = b.step("version_ctrl", "Download and overwrite out-of-date files");
+    const version_ctrl_step = b.step("version-ctrl", "Download and overwrite out-of-date files");
     const version_ctrl_cmd = b.addRunArtifact(version_ctrl_exe);
     version_ctrl_step.dependOn(&version_ctrl_cmd.step);
     version_ctrl_cmd.addArg(b.pathFromRoot("."));
