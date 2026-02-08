@@ -14,6 +14,21 @@ pub fn main() !void {
 
     const ROOT_PATH = args.next() orelse return error.RootPathNotFound; 
 
+    var root_dir = try std.fs.cwd().openDir(ROOT_PATH, .{});
+    defer root_dir.close();
+
+    root_dir.access(OLD_CACHE_PATH, .{}) catch |err| switch(err) {
+        error.FileNotFound => {
+            var old_cache_file = try root_dir.createFile(OLD_CACHE_PATH, .{}); 
+            defer old_cache_file.close();
+            var buf: [64]u8 = undefined;
+            var ocf_writer = old_cache_file.writer(&buf);
+            try ocf_writer.interface.writeAll("{\n\n}");
+            try ocf_writer.interface.flush();
+        },
+        else => return err,
+    };
+
     var writer_buf: [1024 * 1024]u8 = undefined;
     var stdout = std.fs.File.stdout().writer(&writer_buf);
     const writer = &stdout.interface;
@@ -25,6 +40,9 @@ pub fn main() !void {
     //Clear Screen
     try writer.writeAll("\x1B[2J");
     try writer.writeAll("\x1B[H");
+    try writer.flush();
+
+    try writer.writeAll("Initing Program...\n");
     try writer.flush();
 
     var hash_map = std.StringArrayHashMap(JsonEntry).init(allocator); 
@@ -39,15 +57,27 @@ pub fn main() !void {
     var client_interface = try ClientInterface.init(allocator, ROOT_PATH, REPO_URL, TEMP_CACHE_PATH);
     defer client_interface.deinit();
 
+    try writer.writeAll("Downloading comparison file...\n");
+    try writer.flush();
+
     try client_interface.downloadTempCache();
     
+    try writer.writeAll("Parsing cache...\n");
+    try writer.flush();
+
     var old_cache_interface = try CacheFile.init(allocator, OLD_CACHE_PATH, ROOT_PATH);
     defer old_cache_interface.deinit();
     const old_entries = try old_cache_interface.parseAndStoreEntries();
 
+    try writer.writeAll("Parsing tmp cache...\n");
+    try writer.flush();
+
     var temp_cache_interface = try CacheFile.init(allocator, TEMP_CACHE_PATH, ROOT_PATH);
     defer temp_cache_interface.deinit();
     const temp_entries = try temp_cache_interface.parseAndStoreEntries();
+
+    try writer.writeAll("Comparing Files...\n");
+    try writer.flush();
 
     for(temp_entries) |entry| {
         try hash_map.put(entry.full_path, entry);
@@ -61,43 +91,67 @@ pub fn main() !void {
         }
     }
 
-    if(entries_to_update.items.len > 0) try writer.print("{} Files need udpating:\n", .{entries_to_update.items.len});
-    for(entries_to_update.items) |entry| {
-        try writer.print("{s}\n", .{entry.full_path});
-        try writer.writeAll("Would you like to update? [y/n]\n");
-        try writer.flush();
-    }
+    var update_available = false;
 
-    if(deleted_files.items.len > 0) try writer.print("{} Files to be deleted:\n", .{deleted_files.items.len});
-    for(deleted_files.items) |entry| {
-        try writer.print("{s}\n", .{entry});
-        try writer.flush();
-    }
+    try writer.writeAll("\n");
+    try writer.flush();
 
-    while(true) {
-        if(reader.takeDelimiterExclusive('\n')) |line| {
-            if(line.len == 0) continue;
-            reader.toss(1);
-            
-            const char = std.ascii.toLower(line[0]);
-            if(line.len == 1 and (char == 'y' or char == 'n')) {
-                if(char == 'n') return;
-                try client_interface.downloadEntries(entries_to_update.items);
-                for(client_interface.success_files.items) |item| {
-                    try writer.print("{s}: \n{s}\n\n", .{item.file_path, item.content});
-                }
-                break;
-
-            } else {
-                try writer.writeAll("Invalid input! Try again...\n\n");
-                try writer.flush();
-                continue;
-            }
-        } else |err| switch(err) {
-            error.EndOfStream => break,
-            else => return err,
+    if(entries_to_update.items.len > 0) {
+        update_available = true;
+        try writer.print("{} Files need updating:\n", .{entries_to_update.items.len});
+        for(entries_to_update.items) |entry| {
+            try writer.print("{s}\n", .{entry.full_path});
+            try writer.flush();
         }
     }
+
+    if(deleted_files.items.len > 0) {
+        update_available = true;
+        try writer.print("{} Files to be deleted:\n", .{deleted_files.items.len});
+        for(deleted_files.items) |entry| {
+            try writer.print("{s}\n", .{entry});
+            try writer.flush();
+        }
+    }
+
+    try writer.writeAll("\n\n");
+    try writer.flush();
+
+    if(update_available) {
+        try writer.writeAll("Would you like to update? [y/n]\n");
+        try writer.flush();
+
+        while(true) {
+            if(reader.takeDelimiterExclusive('\n')) |line| {
+                if(line.len == 0) continue;
+                reader.toss(1);
+                
+                const char = std.ascii.toLower(line[0]);
+                if(line.len == 1 and (char == 'y' or char == 'n')) {
+                    if(char == 'n') return;
+                    try client_interface.downloadEntries(entries_to_update.items);
+                    for(client_interface.success_files.items) |item| {
+                        try writer.print("{s}: \n{s}\n\n", .{item.file_path, item.content});
+                    }
+                    break;
+
+                } else {
+                    try writer.writeAll("Invalid input! Try again...\n\n");
+                    try writer.flush();
+                    continue;
+                }
+            } else |err| switch(err) {
+                error.EndOfStream => break,
+                else => return err,
+            }
+        }
+    }
+    else {
+        try writer.writeAll("Everying up to date! No action needed.\n");
+        try writer.flush();
+    }
+
+    try root_dir.deleteFile(TEMP_CACHE_PATH);
 
     try old_cache_interface.updateCache(temp_cache_interface.file_content);
 }
@@ -218,8 +272,22 @@ const ClientInterface = struct {
         }
     }
 
-    fn overwriteUpdatedFiles(_: *Self) !void {
+    fn overwriteUpdatedFiles(self: *Self) !void {
+        for(self.success_files.items) |entry| {
+            var file = try self.root_dir.createFile(entry.file_path, {});
+            defer file.close();
+            var buf: [1024 * 1024]u8 = undefined;
+            var fw = file.writer(&buf);
 
+            fw.interface.print("{s}", .{entry.content});
+        }
+
+        for(self.failed_files.items) |file_path| {
+            self.root_dir.deleteFile(file_path) catch |err| switch(err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+        }
     }
 };
 
